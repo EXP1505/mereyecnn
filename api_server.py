@@ -47,9 +47,8 @@ def allowed_file(filename):
 def load_model(model_path='snapshots/unetSSIM/model_epoch_4_unetSSIM_MODEL.ckpt'):
     """Load the trained CNN model"""
     try:
-        model = Unet()
-        checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        # The checkpoint IS the model itself, not a dictionary
+        model = torch.load(model_path, map_location='cpu', weights_only=False)
         model.eval()
         return model
     except Exception as e:
