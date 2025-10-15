@@ -47,8 +47,8 @@ Thumbs.db
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Model files (large files)
-*.ckpt
+# Model files (large files) - but keep the main model
+# *.ckpt
 *.pth
 *.onnx
 *.engine
