@@ -90,42 +90,50 @@ def process_image():
         input_path = os.path.join(UPLOAD_FOLDER, filename)
         file.save(input_path)
         
-        # Process image using existing test.py
+        # Process image directly with the model
         try:
-            # Run inference
-            run_testing(input_image_path=input_path, output_dir=OUTPUT_FOLDER)
+            # Load and preprocess image
+            image = Image.open(input_path).convert('RGB')
+            image = image.resize((512, 512))  # Resize to model input size
+            image_array = np.array(image) / 255.0  # Normalize to [0,1]
+            image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).float().unsqueeze(0)
             
-            # Find the enhanced image
+            # Run inference
+            with torch.no_grad():
+                enhanced_tensor = cnn_model(image_tensor)
+                enhanced_tensor = torch.clamp(enhanced_tensor, 0, 1)
+            
+            # Convert back to image
+            enhanced_array = enhanced_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
+            enhanced_array = (enhanced_array * 255).astype(np.uint8)
+            enhanced_image = Image.fromarray(enhanced_array)
+            
+            # Save enhanced image
             base_name = os.path.splitext(filename)[0]
             enhanced_path = os.path.join(OUTPUT_FOLDER, f"{base_name}_enhanced.jpg")
+            enhanced_image.save(enhanced_path)
             
-            if not os.path.exists(enhanced_path):
-                enhanced_path = os.path.join(OUTPUT_FOLDER, f"{base_name}.jpg")
+            # Calculate metrics
+            metrics = evaluate_image_pair(input_path, enhanced_path)
             
-            if os.path.exists(enhanced_path):
-                # Calculate metrics
-                metrics = evaluate_image_pair(input_path, enhanced_path)
-                
-                # Read enhanced image
-                with open(enhanced_path, 'rb') as f:
-                    enhanced_data = base64.b64encode(f.read()).decode()
-                
-                return jsonify({
-                    'success': True,
-                    'data': {
-                        'original_path': input_path,
-                        'enhanced_path': enhanced_path,
-                        'enhanced_data': enhanced_data,
-                        'filename': filename
-                    },
-                    'metrics': {
-                        'psnr': metrics.get('psnr', 0),
-                        'ssim': metrics.get('ssim', 0),
-                        'uiqm_improvement': metrics.get('uiqm_improvement', 0)
-                    }
-                })
-            else:
-                return jsonify({'success': False, 'error': 'Enhanced image not found'}), 500
+            # Read enhanced image
+            with open(enhanced_path, 'rb') as f:
+                enhanced_data = base64.b64encode(f.read()).decode()
+            
+            return jsonify({
+                'success': True,
+                'data': {
+                    'original_path': input_path,
+                    'enhanced_path': enhanced_path,
+                    'enhanced_data': enhanced_data,
+                    'filename': filename
+                },
+                'metrics': {
+                    'psnr': metrics.get('psnr', 0),
+                    'ssim': metrics.get('ssim', 0),
+                    'uiqm_improvement': metrics.get('uiqm_improvement', 0)
+                }
+            })
                 
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
