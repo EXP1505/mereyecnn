@@ -48,7 +48,7 @@ def load_model(model_path='snapshots/unetSSIM/model_epoch_4_unetSSIM_MODEL.ckpt'
     """Load the trained CNN model"""
     try:
         model = Unet()
-        checkpoint = torch.load(model_path, map_location='cpu')
+        checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         model.eval()
         return model
