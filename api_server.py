@@ -30,7 +30,7 @@ from evaluation_metrics import evaluate_image_pair, print_evaluation_results
 from TRAINING_CONFIG import test_image_path, output_images_path
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for frontend access
+CORS(app, origins=['https://mareye-frontend.vercel.app', 'http://localhost:3000'])  # Enable CORS for specific origins
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
