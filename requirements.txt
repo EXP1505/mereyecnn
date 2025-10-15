@@ -2,3 +2,14 @@ torch
 torchvision
 Pillow
 tqdm
+flask
+flask-cors
+opencv-python
+numpy
+scikit-image
+seaborn
+matplotlib
+pandas
+onnxruntime
+onnx
+werkzeug
