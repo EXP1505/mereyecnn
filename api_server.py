@@ -154,8 +154,8 @@ def process_image():
             
             # Calculate REAL metrics
             try:
-                # Load original image for comparison
-                orig_img = Image.open(input_path).convert('RGB').resize((512, 512))
+                # Load original image for comparison - RESIZE TO MATCH ENHANCED IMAGE
+                orig_img = Image.open(input_path).convert('RGB').resize((256, 256))  # FIXED: Match enhanced image size
                 orig_array = np.array(orig_img).astype(float)
                 enh_array = enhanced_array.astype(float)
                 
@@ -268,10 +268,10 @@ def process_video():
 def run_analytics_api():
     """Run comprehensive analytics on uploaded file"""
     try:
-        if 'file' not in request.files:
-            return jsonify({'success': False, 'error': 'No file provided'}), 400
+        if 'image' not in request.files:
+            return jsonify({'success': False, 'error': 'No image file provided'}), 400
         
-        file = request.files['file']
+        file = request.files['image']
         if file.filename == '':
             return jsonify({'success': False, 'error': 'No file selected'}), 400
         
