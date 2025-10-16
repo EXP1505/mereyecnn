@@ -227,9 +227,9 @@ def run_analytics_api():
         input_path = os.path.join(UPLOAD_FOLDER, filename)
         file.save(input_path)
         
-        # Run analytics (simplified)
+        # Run comprehensive analytics
         try:
-            # Process image first
+            # Process image first to get enhanced version
             run_testing(input_image_path=input_path, output_dir=OUTPUT_FOLDER)
             
             # Find enhanced image
@@ -240,15 +240,32 @@ def run_analytics_api():
                 enhanced_path = os.path.join(OUTPUT_FOLDER, f"{base_name}.jpg")
             
             if os.path.exists(enhanced_path):
-                # Calculate metrics
+                # Run comprehensive analytics with all visualizations
+                from run_analytics import analyze_single_image
+                analyze_single_image(input_path, enhanced_path, "analytics_output")
+                
+                # Get the analytics results
+                analytics_dir = os.path.join("analytics_output", f"{base_name}_analysis")
+                
+                # Calculate basic metrics for API response
                 metrics = evaluate_image_pair(input_path, enhanced_path)
                 
                 return jsonify({
                     'success': True,
                     'data': {
-                        'analytics_path': OUTPUT_FOLDER,
+                        'analytics_path': analytics_dir,
                         'original_path': input_path,
-                        'enhanced_path': enhanced_path
+                        'enhanced_path': enhanced_path,
+                        'analytics_files': {
+                            'basic_metrics': os.path.join(analytics_dir, 'basic_metrics.png'),
+                            'color_analysis': os.path.join(analytics_dir, 'color_analysis.png'),
+                            'texture_edge_analysis': os.path.join(analytics_dir, 'texture_edge_analysis.png'),
+                            'histogram_analysis': os.path.join(analytics_dir, 'histogram_analysis.png'),
+                            'brightness_contrast_analysis': os.path.join(analytics_dir, 'brightness_contrast_analysis.png'),
+                            'quality_dashboard': os.path.join(analytics_dir, 'quality_dashboard.png'),
+                            'detailed_report_json': os.path.join(analytics_dir, f'{base_name}_detailed_report.json'),
+                            'detailed_report_txt': os.path.join(analytics_dir, f'{base_name}_detailed_report.txt')
+                        }
                     },
                     'metrics': {
                         'psnr': metrics.get('psnr', 0),
