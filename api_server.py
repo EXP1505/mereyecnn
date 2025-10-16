@@ -136,27 +136,52 @@ def process_image():
             enhanced_image.save(enhanced_path)
             print(f"Enhanced image saved to: {enhanced_path}")
             
-            # Calculate basic metrics
+            # Calculate REAL metrics
             try:
-                # Simple PSNR calculation
+                # Load original image for comparison
                 orig_img = Image.open(input_path).convert('RGB').resize((512, 512))
-                enh_img = Image.fromarray(enhanced_array)
-                
                 orig_array = np.array(orig_img).astype(float)
-                enh_array = np.array(enh_img).astype(float)
+                enh_array = enhanced_array.astype(float)
                 
+                # PSNR calculation
                 mse = np.mean((orig_array - enh_array) ** 2)
                 psnr = 20 * np.log10(255.0 / np.sqrt(mse)) if mse > 0 else 0
                 
+                # SSIM calculation
+                def calculate_ssim(img1, img2):
+                    gray1 = cv2.cvtColor(img1.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                    gray2 = cv2.cvtColor(img2.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                    mu1, mu2 = np.mean(gray1), np.mean(gray2)
+                    sigma1_sq, sigma2_sq = np.var(gray1), np.var(gray2)
+                    sigma12 = np.mean((gray1 - mu1) * (gray2 - mu2))
+                    c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
+                    ssim = ((2 * mu1 * mu2 + c1) * (2 * sigma12 + c2)) / ((mu1**2 + mu2**2 + c1) * (sigma1_sq + sigma2_sq + c2))
+                    return ssim
+                
+                ssim = calculate_ssim(orig_array, enh_array)
+                
+                # UIQM calculation
+                def calculate_uiqm(img):
+                    colorfulness = np.std(img)
+                    gray = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                    sharpness = np.var(cv2.Laplacian(gray, cv2.CV_64F))
+                    contrast = np.std(gray)
+                    return 0.0282 * colorfulness + 0.2953 * sharpness + 0.6765 * contrast
+                
+                orig_uiqm = calculate_uiqm(orig_array)
+                enh_uiqm = calculate_uiqm(enh_array)
+                uiqm_improvement = ((enh_uiqm - orig_uiqm) / orig_uiqm) * 100 if orig_uiqm > 0 else 0
+                
                 metrics = {
-                    'psnr': psnr,
-                    'ssim': 0.9,  # Placeholder
-                    'uiqm_improvement': 50.0  # Placeholder
+                    'psnr': round(psnr, 2),
+                    'ssim': round(ssim, 4),
+                    'uiqm_improvement': round(uiqm_improvement, 1)
                 }
-                print(f"Calculated PSNR: {psnr:.2f} dB")
+                print(f"REAL Metrics - PSNR: {psnr:.2f} dB, SSIM: {ssim:.4f}, UIQM: {uiqm_improvement:.1f}%")
             except Exception as e:
                 print(f"Error calculating metrics: {e}")
-                metrics = {'psnr': 15.0, 'ssim': 0.85, 'uiqm_improvement': 50.0}
+                # Only use fallback if calculation fails
+                metrics = {'psnr': 0, 'ssim': 0, 'uiqm_improvement': 0}
             
             # Read enhanced image
             with open(enhanced_path, 'rb') as f:
@@ -269,24 +294,88 @@ def run_analytics_api():
             enhanced_path = os.path.join(OUTPUT_FOLDER, f"{base_name}_enhanced.jpg")
             enhanced_image.save(enhanced_path)
             
-            # Calculate basic metrics
+            # Calculate REAL metrics
             orig_array = np.array(image).astype(float)
             enh_array = enhanced_array.astype(float)
+            
+            # PSNR calculation
             mse = np.mean((orig_array - enh_array) ** 2)
             psnr = 20 * np.log10(255.0 / np.sqrt(mse)) if mse > 0 else 0
+            
+            # SSIM calculation (simplified)
+            def calculate_ssim(img1, img2):
+                # Convert to grayscale
+                gray1 = cv2.cvtColor(img1.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                gray2 = cv2.cvtColor(img2.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                
+                # Calculate means
+                mu1 = np.mean(gray1)
+                mu2 = np.mean(gray2)
+                
+                # Calculate variances and covariance
+                sigma1_sq = np.var(gray1)
+                sigma2_sq = np.var(gray2)
+                sigma12 = np.mean((gray1 - mu1) * (gray2 - mu2))
+                
+                # SSIM constants
+                c1 = (0.01 * 255) ** 2
+                c2 = (0.03 * 255) ** 2
+                
+                # Calculate SSIM
+                ssim = ((2 * mu1 * mu2 + c1) * (2 * sigma12 + c2)) / ((mu1**2 + mu2**2 + c1) * (sigma1_sq + sigma2_sq + c2))
+                return ssim
+            
+            ssim = calculate_ssim(orig_array, enh_array)
+            
+            # Color analysis
+            orig_mean = np.mean(orig_array, axis=(0, 1))
+            enh_mean = np.mean(enh_array, axis=(0, 1))
+            color_improvement = np.mean(enh_mean - orig_mean)
+            
+            # Brightness analysis
+            orig_brightness = np.mean(orig_array)
+            enh_brightness = np.mean(enh_array)
+            brightness_improvement = enh_brightness - orig_brightness
+            
+            # Contrast analysis
+            orig_contrast = np.std(orig_array)
+            enh_contrast = np.std(enh_array)
+            contrast_improvement = enh_contrast - orig_contrast
+            
+            # UIQM calculation (simplified)
+            def calculate_uiqm(img):
+                # Colorfulness
+                colorfulness = np.std(img)
+                
+                # Sharpness (using Laplacian)
+                gray = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                sharpness = np.var(cv2.Laplacian(gray, cv2.CV_64F))
+                
+                # Contrast
+                contrast = np.std(gray)
+                
+                # UIQM score (simplified formula)
+                uiqm = 0.0282 * colorfulness + 0.2953 * sharpness + 0.6765 * contrast
+                return uiqm
+            
+            orig_uiqm = calculate_uiqm(orig_array)
+            enh_uiqm = calculate_uiqm(enh_array)
+            uiqm_improvement = ((enh_uiqm - orig_uiqm) / orig_uiqm) * 100 if orig_uiqm > 0 else 0
             
             # Create analytics directory
             analytics_dir = os.path.join("analytics_output", f"{base_name}_analysis")
             os.makedirs(analytics_dir, exist_ok=True)
             
-            # Create simple analytics files
+            # REAL analytics data
             analytics_data = {
-                'psnr': psnr,
-                'ssim': 0.9,
-                'uiqm_improvement': 50.0,
-                'color_improvement': 25.0,
-                'brightness_improvement': 20.0,
-                'contrast_improvement': 15.0
+                'psnr': round(psnr, 2),
+                'ssim': round(ssim, 4),
+                'uiqm_improvement': round(uiqm_improvement, 1),
+                'color_improvement': round(color_improvement, 1),
+                'brightness_improvement': round(brightness_improvement, 1),
+                'contrast_improvement': round(contrast_improvement, 1),
+                'original_uiqm': round(orig_uiqm, 4),
+                'enhanced_uiqm': round(enh_uiqm, 4)
             }
             
             # Save analytics JSON
