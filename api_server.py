@@ -110,16 +110,20 @@ def process_image():
         
         # Process image directly with the model
         try:
+            print(f"Processing image: {input_path}")
             # Load and preprocess image
             image = Image.open(input_path).convert('RGB')
+            print(f"Image loaded, size: {image.size}")
             image = image.resize((512, 512))  # Resize to model input size
             image_array = np.array(image) / 255.0  # Normalize to [0,1]
             image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).float().unsqueeze(0)
+            print(f"Image tensor shape: {image_tensor.shape}")
             
             # Run inference
             with torch.no_grad():
                 enhanced_tensor = cnn_model(image_tensor)
                 enhanced_tensor = torch.clamp(enhanced_tensor, 0, 1)
+            print(f"Enhanced tensor shape: {enhanced_tensor.shape}")
             
             # Convert back to image
             enhanced_array = enhanced_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
@@ -130,9 +134,14 @@ def process_image():
             base_name = os.path.splitext(filename)[0]
             enhanced_path = os.path.join(OUTPUT_FOLDER, f"{base_name}_enhanced.jpg")
             enhanced_image.save(enhanced_path)
+            print(f"Enhanced image saved to: {enhanced_path}")
             
             # Calculate metrics
-            metrics = evaluate_image_pair(input_path, enhanced_path)
+            try:
+                metrics = evaluate_image_pair(input_path, enhanced_path)
+            except Exception as e:
+                print(f"Error calculating metrics: {e}")
+                metrics = {'psnr': 0, 'ssim': 0, 'uiqm_improvement': 0}
             
             # Read enhanced image
             with open(enhanced_path, 'rb') as f:
