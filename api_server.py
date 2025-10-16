@@ -383,6 +383,33 @@ def run_analytics_api():
             with open(os.path.join(analytics_dir, f"{base_name}_analytics.json"), 'w') as f:
                 json.dump(analytics_data, f, indent=2)
             
+            # Generate ALL visualization graphs
+            print("Generating visualization graphs...")
+            try:
+                from run_analytics import analyze_single_image
+                analyze_single_image(input_path, enhanced_path, "analytics_output")
+                print("SUCCESS: All 6 visualization graphs generated")
+            except Exception as e:
+                print(f"Warning: Could not generate visualization graphs: {e}")
+                # Create simple graphs as fallback
+                import matplotlib.pyplot as plt
+                import matplotlib
+                matplotlib.use('Agg')  # Use non-interactive backend
+                
+                # Basic metrics plot
+                fig, ax = plt.subplots(figsize=(10, 6))
+                metrics_names = ['PSNR', 'SSIM', 'UIQM Improvement']
+                metrics_values = [analytics_data['psnr'], analytics_data['ssim'], analytics_data['uiqm_improvement']]
+                ax.bar(metrics_names, metrics_values, color=['lightblue', 'lightgreen', 'lightcoral'])
+                ax.set_title(f'Basic Enhancement Metrics - {base_name}')
+                ax.set_ylabel('Values')
+                for i, v in enumerate(metrics_values):
+                    ax.text(i, v + 0.1, f'{v:.2f}', ha='center', va='bottom')
+                plt.tight_layout()
+                plt.savefig(os.path.join(analytics_dir, 'basic_metrics.png'), dpi=150, bbox_inches='tight')
+                plt.close()
+                print("SUCCESS: Basic metrics graph generated as fallback")
+            
             return jsonify({
                 'success': True,
                 'data': {
@@ -390,7 +417,15 @@ def run_analytics_api():
                     'original_path': input_path,
                     'enhanced_path': enhanced_path,
                     'analytics_files': {
-                        'analytics_json': os.path.join(analytics_dir, f"{base_name}_analytics.json")
+                        'analytics_json': os.path.join(analytics_dir, f"{base_name}_analytics.json"),
+                        'basic_metrics': os.path.join(analytics_dir, 'basic_metrics.png'),
+                        'color_analysis': os.path.join(analytics_dir, 'color_analysis.png'),
+                        'texture_edge_analysis': os.path.join(analytics_dir, 'texture_edge_analysis.png'),
+                        'histogram_analysis': os.path.join(analytics_dir, 'histogram_analysis.png'),
+                        'brightness_contrast_analysis': os.path.join(analytics_dir, 'brightness_contrast_analysis.png'),
+                        'quality_dashboard': os.path.join(analytics_dir, 'quality_dashboard.png'),
+                        'detailed_report_json': os.path.join(analytics_dir, f'{base_name}_detailed_report.json'),
+                        'detailed_report_txt': os.path.join(analytics_dir, f'{base_name}_detailed_report.txt')
                     }
                 },
                 'metrics': analytics_data
