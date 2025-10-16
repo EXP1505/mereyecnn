@@ -54,11 +54,20 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def load_model(model_path='snapshots/unetSSIM/model_epoch_4_unetSSIM_MODEL.ckpt'):
-    """Load the trained CNN model"""
+    """Load the trained CNN model with memory optimization"""
     try:
-        # The checkpoint IS the model itself, not a dictionary
+        # Clear any existing cache
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        
+        # Load model on CPU to save memory
         model = torch.load(model_path, map_location='cpu', weights_only=False)
         model.eval()
+        
+        # Set model to evaluation mode and disable gradients
+        for param in model.parameters():
+            param.requires_grad = False
+        
+        print(f"Model loaded successfully on CPU with memory optimization")
         return model
     except Exception as e:
         print(f"Error loading model: {e}")
@@ -111,19 +120,26 @@ def process_image():
         # Process image directly with the model
         try:
             print(f"Processing image: {input_path}")
-            # Load and preprocess image
+            # Load and preprocess image with memory optimization
             image = Image.open(input_path).convert('RGB')
             print(f"Image loaded, size: {image.size}")
-            image = image.resize((512, 512))  # Resize to model input size
+            
+            # Resize to smaller size to reduce memory usage
+            image = image.resize((256, 256))  # Reduced from 512x512 to 256x256
             image_array = np.array(image) / 255.0  # Normalize to [0,1]
             image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).float().unsqueeze(0)
             print(f"Image tensor shape: {image_tensor.shape}")
             
-            # Run inference
+            # Run inference with memory optimization
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
             with torch.no_grad():
                 enhanced_tensor = cnn_model(image_tensor)
                 enhanced_tensor = torch.clamp(enhanced_tensor, 0, 1)
             print(f"Enhanced tensor shape: {enhanced_tensor.shape}")
+            
+            # Clear memory
+            del image_tensor
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
             
             # Convert back to image
             enhanced_array = enhanced_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
@@ -273,16 +289,21 @@ def run_analytics_api():
             if cnn_model is None:
                 return jsonify({'success': False, 'error': 'CNN model not loaded'}), 500
             
-            # Load and preprocess image
+            # Load and preprocess image with memory optimization
             image = Image.open(input_path).convert('RGB')
-            image = image.resize((512, 512))
+            image = image.resize((256, 256))  # Reduced size for memory efficiency
             image_array = np.array(image) / 255.0
             image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).float().unsqueeze(0)
             
-            # Run inference
+            # Run inference with memory optimization
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
             with torch.no_grad():
                 enhanced_tensor = cnn_model(image_tensor)
                 enhanced_tensor = torch.clamp(enhanced_tensor, 0, 1)
+            
+            # Clear memory
+            del image_tensor
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
             
             # Convert back to image
             enhanced_array = enhanced_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
