@@ -77,6 +77,15 @@ def health_check():
         'version': '1.0.0'
     })
 
+@app.route('/test-cors', methods=['GET', 'POST', 'OPTIONS'])
+def test_cors():
+    """Test CORS endpoint"""
+    return jsonify({
+        'message': 'CORS is working!',
+        'method': request.method,
+        'origin': request.headers.get('Origin', 'No origin header')
+    })
+
 @app.route('/api/process-image', methods=['POST'])
 def process_image():
     """Process single image with CNN model"""
