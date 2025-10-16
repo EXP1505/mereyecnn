@@ -30,8 +30,9 @@ from evaluation_metrics import evaluate_image_pair, print_evaluation_results
 from TRAINING_CONFIG import test_image_path, output_images_path
 
 app = Flask(__name__)
-CORS(app, origins=['*'], methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], 
-     allow_headers=['Content-Type', 'Authorization', 'X-Requested-With'])  # Allow all origins temporarily
+CORS(app, origins=['https://mareye-frontend.vercel.app', 'http://localhost:3000', 'http://localhost:3001'], 
+     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], 
+     allow_headers=['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'])
 
 # Add explicit CORS headers to all responses
 @app.after_request
@@ -246,20 +247,140 @@ def process_video():
         input_path = os.path.join(UPLOAD_FOLDER, filename)
         file.save(input_path)
         
-        # Process video (simplified for now)
-        return jsonify({
-            'success': True,
-            'data': {
-                'original_path': input_path,
-                'enhanced_path': input_path,  # Placeholder
-                'filename': filename
-            },
-            'metrics': {
-                'psnr': 15.0,
-                'ssim': 0.85,
-                'uiqm_improvement': 50.0
-            }
-        })
+        # Process video with REAL enhancement
+        try:
+            import cv2
+            import numpy as np
+            
+            # Read video
+            cap = cv2.VideoCapture(input_path)
+            fps = int(cap.get(cv2.CAP_PROP_FPS))
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            # Create output video
+            base_name = os.path.splitext(filename)[0]
+            enhanced_path = os.path.join(OUTPUT_FOLDER, f"{base_name}_enhanced.mp4")
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(enhanced_path, fourcc, fps, (256, 256))  # Resize to 256x256
+            
+            frame_count = 0
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Resize frame to 256x256
+                frame_resized = cv2.resize(frame, (256, 256))
+                
+                # Convert to PIL Image
+                frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+                image = Image.fromarray(frame_rgb)
+                
+                # Preprocess for model
+                image_array = np.array(image) / 255.0
+                image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).float().unsqueeze(0)
+                
+                # Run inference
+                with torch.no_grad():
+                    enhanced_tensor = cnn_model(image_tensor)
+                    enhanced_tensor = torch.clamp(enhanced_tensor, 0, 1)
+                
+                # Convert back to frame
+                enhanced_array = enhanced_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
+                enhanced_array = (enhanced_array * 255).astype(np.uint8)
+                enhanced_frame = cv2.cvtColor(enhanced_array, cv2.COLOR_RGB2BGR)
+                
+                # Write enhanced frame
+                out.write(enhanced_frame)
+                frame_count += 1
+                
+                # Process every 10th frame to avoid memory issues
+                if frame_count % 10 == 0:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_count)
+            
+            cap.release()
+            out.release()
+            
+            # Calculate REAL metrics on first frame
+            cap = cv2.VideoCapture(input_path)
+            ret, orig_frame = cap.read()
+            if ret:
+                orig_frame_resized = cv2.resize(orig_frame, (256, 256))
+                orig_rgb = cv2.cvtColor(orig_frame_resized, cv2.COLOR_BGR2RGB)
+                orig_image = Image.fromarray(orig_rgb)
+                
+                # Process first frame for metrics
+                orig_array = np.array(orig_image) / 255.0
+                orig_tensor = torch.from_numpy(orig_array).permute(2, 0, 1).float().unsqueeze(0)
+                
+                with torch.no_grad():
+                    enhanced_tensor = cnn_model(orig_tensor)
+                    enhanced_tensor = torch.clamp(enhanced_tensor, 0, 1)
+                
+                enhanced_array = enhanced_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
+                
+                # Calculate REAL metrics
+                orig_float = orig_array.astype(float)
+                enh_float = enhanced_array.astype(float)
+                
+                # PSNR
+                mse = np.mean((orig_float - enh_float) ** 2)
+                psnr = 20 * np.log10(1.0 / np.sqrt(mse)) if mse > 0 else 0
+                
+                # SSIM
+                def calculate_ssim(img1, img2):
+                    gray1 = cv2.cvtColor(img1.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                    gray2 = cv2.cvtColor(img2.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                    mu1, mu2 = np.mean(gray1), np.mean(gray2)
+                    sigma1_sq, sigma2_sq = np.var(gray1), np.var(gray2)
+                    sigma12 = np.mean((gray1 - mu1) * (gray2 - mu2))
+                    c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
+                    ssim = ((2 * mu1 * mu2 + c1) * (2 * sigma12 + c2)) / ((mu1**2 + mu2**2 + c1) * (sigma1_sq + sigma2_sq + c2))
+                    return ssim
+                
+                ssim = calculate_ssim(orig_float, enh_float)
+                
+                # UIQM
+                def calculate_uiqm(img):
+                    colorfulness = np.std(img)
+                    gray = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                    sharpness = np.var(cv2.Laplacian(gray, cv2.CV_64F))
+                    contrast = np.std(gray)
+                    return 0.0282 * colorfulness + 0.2953 * sharpness + 0.6765 * contrast
+                
+                orig_uiqm = calculate_uiqm(orig_float)
+                enh_uiqm = calculate_uiqm(enh_float)
+                uiqm_improvement = ((enh_uiqm - orig_uiqm) / orig_uiqm) * 100 if orig_uiqm > 0 else 0
+                
+                real_metrics = {
+                    'psnr': round(psnr, 2),
+                    'ssim': round(ssim, 4),
+                    'uiqm_improvement': round(uiqm_improvement, 1)
+                }
+            else:
+                real_metrics = {'psnr': 0, 'ssim': 0, 'uiqm_improvement': 0}
+            
+            cap.release()
+            
+            return jsonify({
+                'success': True,
+                'data': {
+                    'original_path': input_path,
+                    'enhanced_path': enhanced_path,
+                    'filename': filename
+                },
+                'metrics': real_metrics
+            })
+            
+        except Exception as e:
+            print(f"Error processing video: {e}")
+            return jsonify({
+                'success': False,
+                'error': f'Video processing failed: {str(e)}'
+            }), 500
             
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -404,32 +525,201 @@ def run_analytics_api():
             with open(os.path.join(analytics_dir, f"{base_name}_analytics.json"), 'w') as f:
                 json.dump(analytics_data, f, indent=2)
             
-            # Generate ALL visualization graphs
-            print("Generating visualization graphs...")
-            try:
-                from run_analytics import analyze_single_image
-                analyze_single_image(input_path, enhanced_path, "analytics_output")
-                print("SUCCESS: All 6 visualization graphs generated")
-            except Exception as e:
-                print(f"Warning: Could not generate visualization graphs: {e}")
-                # Create simple graphs as fallback
-                import matplotlib.pyplot as plt
-                import matplotlib
-                matplotlib.use('Agg')  # Use non-interactive backend
-                
-                # Basic metrics plot
-                fig, ax = plt.subplots(figsize=(10, 6))
-                metrics_names = ['PSNR', 'SSIM', 'UIQM Improvement']
-                metrics_values = [analytics_data['psnr'], analytics_data['ssim'], analytics_data['uiqm_improvement']]
-                ax.bar(metrics_names, metrics_values, color=['lightblue', 'lightgreen', 'lightcoral'])
-                ax.set_title(f'Basic Enhancement Metrics - {base_name}')
-                ax.set_ylabel('Values')
-                for i, v in enumerate(metrics_values):
-                    ax.text(i, v + 0.1, f'{v:.2f}', ha='center', va='bottom')
-                plt.tight_layout()
-                plt.savefig(os.path.join(analytics_dir, 'basic_metrics.png'), dpi=150, bbox_inches='tight')
-                plt.close()
-                print("SUCCESS: Basic metrics graph generated as fallback")
+                # Generate ALL 6 visualization graphs with REAL data
+                print("Generating ALL 6 visualization graphs...")
+                try:
+                    import matplotlib.pyplot as plt
+                    import matplotlib
+                    import seaborn as sns
+                    matplotlib.use('Agg')  # Use non-interactive backend
+                    
+                    # 1. Basic Metrics Plot
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    metrics_names = ['PSNR', 'SSIM', 'UIQM Improvement']
+                    metrics_values = [analytics_data['psnr'], analytics_data['ssim'], analytics_data['uiqm_improvement']]
+                    bars = ax.bar(metrics_names, metrics_values, color=['#3B82F6', '#10B981', '#8B5CF6'])
+                    ax.set_title(f'Basic Enhancement Metrics - {base_name}', fontsize=16, fontweight='bold')
+                    ax.set_ylabel('Values', fontsize=12)
+                    ax.set_ylim(0, max(metrics_values) * 1.2)
+                    for i, v in enumerate(metrics_values):
+                        ax.text(i, v + max(metrics_values) * 0.02, f'{v:.2f}', ha='center', va='bottom', fontweight='bold')
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(analytics_dir, 'basic_metrics.png'), dpi=150, bbox_inches='tight')
+                    plt.close()
+                    
+                    # 2. Color Analysis Plot
+                    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+                    
+                    # Original vs Enhanced Color Distribution
+                    orig_colors = orig_array.reshape(-1, 3)
+                    enh_colors = enh_array.reshape(-1, 3)
+                    
+                    ax1.scatter(orig_colors[:, 0], orig_colors[:, 1], alpha=0.1, s=1, c='red', label='Original')
+                    ax1.scatter(enh_colors[:, 0], enh_colors[:, 1], alpha=0.1, s=1, c='blue', label='Enhanced')
+                    ax1.set_xlabel('Red Channel')
+                    ax1.set_ylabel('Green Channel')
+                    ax1.set_title('Color Distribution Comparison')
+                    ax1.legend()
+                    
+                    # Color Improvement
+                    color_improvements = ['Red', 'Green', 'Blue']
+                    color_values = [enh_mean[0] - orig_mean[0], enh_mean[1] - orig_mean[1], enh_mean[2] - orig_mean[2]]
+                    bars = ax2.bar(color_improvements, color_values, color=['#EF4444', '#10B981', '#3B82F6'])
+                    ax2.set_title('Color Channel Improvements')
+                    ax2.set_ylabel('Improvement')
+                    ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+                    for i, v in enumerate(color_values):
+                        ax2.text(i, v + (0.1 if v >= 0 else -0.1), f'{v:.2f}', ha='center', va='bottom' if v >= 0 else 'top')
+                    
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(analytics_dir, 'color_analysis.png'), dpi=150, bbox_inches='tight')
+                    plt.close()
+                    
+                    # 3. Texture & Edge Analysis
+                    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+                    
+                    # Original and Enhanced images
+                    ax1.imshow(orig_array.astype(np.uint8))
+                    ax1.set_title('Original Image')
+                    ax1.axis('off')
+                    
+                    ax2.imshow(enh_array.astype(np.uint8))
+                    ax2.set_title('Enhanced Image')
+                    ax2.axis('off')
+                    
+                    # Edge detection comparison
+                    orig_gray = cv2.cvtColor(orig_array.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                    enh_gray = cv2.cvtColor(enh_array.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                    
+                    orig_edges = cv2.Canny(orig_gray, 50, 150)
+                    enh_edges = cv2.Canny(enh_gray, 50, 150)
+                    
+                    ax3.imshow(orig_edges, cmap='gray')
+                    ax3.set_title('Original Edges')
+                    ax3.axis('off')
+                    
+                    ax4.imshow(enh_edges, cmap='gray')
+                    ax4.set_title('Enhanced Edges')
+                    ax4.axis('off')
+                    
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(analytics_dir, 'texture_edge_analysis.png'), dpi=150, bbox_inches='tight')
+                    plt.close()
+                    
+                    # 4. Histogram Analysis
+                    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+                    
+                    # RGB Histograms
+                    colors = ['red', 'green', 'blue']
+                    for i, color in enumerate(colors):
+                        ax1.hist(orig_array[:, :, i].flatten(), bins=50, alpha=0.7, color=color, label=f'Original {color.title()}')
+                        ax2.hist(enh_array[:, :, i].flatten(), bins=50, alpha=0.7, color=color, label=f'Enhanced {color.title()}')
+                    
+                    ax1.set_title('Original Image Histogram')
+                    ax1.set_xlabel('Pixel Value')
+                    ax1.set_ylabel('Frequency')
+                    ax1.legend()
+                    ax1.grid(True, alpha=0.3)
+                    
+                    ax2.set_title('Enhanced Image Histogram')
+                    ax2.set_xlabel('Pixel Value')
+                    ax2.set_ylabel('Frequency')
+                    ax2.legend()
+                    ax2.grid(True, alpha=0.3)
+                    
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(analytics_dir, 'histogram_analysis.png'), dpi=150, bbox_inches='tight')
+                    plt.close()
+                    
+                    # 5. Brightness & Contrast Analysis
+                    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+                    
+                    # Brightness comparison
+                    brightness_data = ['Original', 'Enhanced']
+                    brightness_values = [orig_brightness, enh_brightness]
+                    bars1 = ax1.bar(brightness_data, brightness_values, color=['#6B7280', '#10B981'])
+                    ax1.set_title('Brightness Comparison')
+                    ax1.set_ylabel('Average Brightness')
+                    for i, v in enumerate(brightness_values):
+                        ax1.text(i, v + max(brightness_values) * 0.02, f'{v:.2f}', ha='center', va='bottom', fontweight='bold')
+                    
+                    # Contrast comparison
+                    contrast_data = ['Original', 'Enhanced']
+                    contrast_values = [orig_contrast, enh_contrast]
+                    bars2 = ax2.bar(contrast_data, contrast_values, color=['#6B7280', '#3B82F6'])
+                    ax2.set_title('Contrast Comparison')
+                    ax2.set_ylabel('Standard Deviation')
+                    for i, v in enumerate(contrast_values):
+                        ax2.text(i, v + max(contrast_values) * 0.02, f'{v:.2f}', ha='center', va='bottom', fontweight='bold')
+                    
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(analytics_dir, 'brightness_contrast_analysis.png'), dpi=150, bbox_inches='tight')
+                    plt.close()
+                    
+                    # 6. Quality Dashboard
+                    fig = plt.figure(figsize=(16, 10))
+                    gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
+                    
+                    # Main metrics
+                    ax1 = fig.add_subplot(gs[0, :])
+                    metrics = ['PSNR', 'SSIM', 'UIQM', 'Color', 'Brightness', 'Contrast']
+                    values = [analytics_data['psnr'], analytics_data['ssim'], analytics_data['uiqm_improvement'], 
+                             analytics_data['color_improvement'], analytics_data['brightness_improvement'], analytics_data['contrast_improvement']]
+                    colors = ['#3B82F6', '#10B981', '#8B5CF6', '#F59E0B', '#EF4444', '#06B6D4']
+                    bars = ax1.bar(metrics, values, color=colors)
+                    ax1.set_title('Complete Quality Dashboard', fontsize=16, fontweight='bold')
+                    ax1.set_ylabel('Values')
+                    for i, v in enumerate(values):
+                        ax1.text(i, v + max(values) * 0.02, f'{v:.2f}', ha='center', va='bottom', fontweight='bold')
+                    
+                    # Image comparison
+                    ax2 = fig.add_subplot(gs[1, 0])
+                    ax2.imshow(orig_array.astype(np.uint8))
+                    ax2.set_title('Original')
+                    ax2.axis('off')
+                    
+                    ax3 = fig.add_subplot(gs[1, 1])
+                    ax3.imshow(enh_array.astype(np.uint8))
+                    ax3.set_title('Enhanced')
+                    ax3.axis('off')
+                    
+                    # Difference map
+                    diff = np.abs(enh_array - orig_array)
+                    ax4 = fig.add_subplot(gs[1, 2])
+                    ax4.imshow(diff.astype(np.uint8))
+                    ax4.set_title('Difference Map')
+                    ax4.axis('off')
+                    
+                    # Summary stats
+                    ax5 = fig.add_subplot(gs[2, :])
+                    ax5.axis('off')
+                    summary_text = f"""
+                    Enhancement Summary:
+                    • PSNR: {analytics_data['psnr']:.2f} dB (Higher is better)
+                    • SSIM: {analytics_data['ssim']:.4f} (Closer to 1 is better)
+                    • UIQM Improvement: {analytics_data['uiqm_improvement']:.1f}%
+                    • Color Improvement: {analytics_data['color_improvement']:.2f}
+                    • Brightness Change: {analytics_data['brightness_improvement']:.2f}
+                    • Contrast Change: {analytics_data['contrast_improvement']:.2f}
+                    """
+                    ax5.text(0.1, 0.5, summary_text, fontsize=12, verticalalignment='center',
+                            bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue", alpha=0.5))
+                    
+                    plt.savefig(os.path.join(analytics_dir, 'quality_dashboard.png'), dpi=150, bbox_inches='tight')
+                    plt.close()
+                    
+                    print("SUCCESS: All 6 visualization graphs generated with REAL data")
+                    
+                except Exception as e:
+                    print(f"Error generating graphs: {e}")
+                    # Fallback simple graph
+                    import matplotlib.pyplot as plt
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    ax.bar(['PSNR', 'SSIM', 'UIQM'], [analytics_data['psnr'], analytics_data['ssim'], analytics_data['uiqm_improvement']])
+                    ax.set_title('Basic Metrics')
+                    plt.savefig(os.path.join(analytics_dir, 'basic_metrics.png'), dpi=150, bbox_inches='tight')
+                    plt.close()
+                    print("SUCCESS: Fallback graph generated")
             
             return jsonify({
                 'success': True,
