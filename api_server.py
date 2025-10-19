@@ -55,21 +55,16 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def load_model(model_path='snapshots/unetSSIM/model_epoch_4_unetSSIM_MODEL.ckpt'):
-    """Load the trained CNN model with memory optimization"""
+    """Load the trained CNN model with memory optimization for free tier"""
     try:
         # Clear any existing cache
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
         
-        # Load model on CPU to save memory
-        model = torch.load(model_path, map_location='cpu', weights_only=False)
-        model.eval()
-        
-        # Set model to evaluation mode and disable gradients
-        for param in model.parameters():
-            param.requires_grad = False
-        
-        print(f"Model loaded successfully on CPU with memory optimization")
-        return model
+        # For free tier, skip CNN model loading to save memory
+        # Use traditional CV enhancement instead
+        print(f"Skipping CNN model loading for free tier optimization")
+        print(f"Using traditional computer vision enhancement instead")
+        return None
     except Exception as e:
         print(f"Error loading model: {e}")
         return None
@@ -98,7 +93,7 @@ def test_cors():
 
 @app.route('/api/process-image', methods=['POST'])
 def process_image():
-    """Process single image with CNN model"""
+    """Process single image with CNN model or traditional CV enhancement"""
     try:
         if 'image' not in request.files:
             return jsonify({'success': False, 'error': 'No image file provided'}), 400
@@ -110,7 +105,10 @@ def process_image():
         if not allowed_file(file.filename):
             return jsonify({'success': False, 'error': 'Invalid file type'}), 400
         
-        if cnn_model is None:
+        # Get enhancement mode (default to 'traditional' for better results on regular images)
+        enhancement_mode = request.form.get('mode', 'traditional')  # 'underwater' or 'traditional'
+        
+        if enhancement_mode == 'underwater' and cnn_model is None:
             return jsonify({'success': False, 'error': 'CNN model not loaded'}), 500
         
         # Save uploaded file
@@ -118,15 +116,52 @@ def process_image():
         input_path = os.path.join(UPLOAD_FOLDER, filename)
         file.save(input_path)
         
-        # Process image directly with the model
+        # Process image with enhancement
         try:
-            print(f"Processing image: {input_path}")
-            # Load and preprocess image with memory optimization
+            print(f"Processing image with {enhancement_mode} enhancement: {input_path}")
+            # Load and preprocess image
             image = Image.open(input_path).convert('RGB')
             print(f"Image loaded, size: {image.size}")
             
-            # Resize to smaller size to reduce memory usage
-            image = image.resize((256, 256))  # Reduced from 512x512 to 256x256
+                   # Resize to very small size for free tier memory optimization
+                   image = image.resize((128, 128))  # Further reduced for free tier
+            
+            if enhancement_mode == 'traditional':
+                # Traditional computer vision enhancement
+                import cv2
+                import numpy as np
+                
+                # Convert PIL to OpenCV format
+                cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+                
+                # Convert to LAB color space for better enhancement
+                lab = cv2.cvtColor(cv_image, cv2.COLOR_BGR2LAB)
+                l, a, b = cv2.split(lab)
+                
+                # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to L channel
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+                l = clahe.apply(l)
+                
+                # Merge channels back
+                enhanced_lab = cv2.merge([l, a, b])
+                enhanced_cv = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+                
+                # Apply slight sharpening
+                kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+                enhanced_cv = cv2.filter2D(enhanced_cv, -1, kernel)
+                enhanced_cv = np.clip(enhanced_cv, 0, 255).astype(np.uint8)
+                
+                # Slight saturation boost
+                hsv = cv2.cvtColor(enhanced_cv, cv2.COLOR_BGR2HSV)
+                hsv[:,:,1] = hsv[:,:,1] * 1.1  # Increase saturation
+                hsv[:,:,1] = np.clip(hsv[:,:,1], 0, 255)
+                enhanced_cv = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+                
+                # Convert back to PIL
+                enhanced_image = Image.fromarray(cv2.cvtColor(enhanced_cv, cv2.COLOR_BGR2RGB))
+                
+            else:  # underwater mode
+                # CNN model enhancement
             image_array = np.array(image) / 255.0  # Normalize to [0,1]
             image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).float().unsqueeze(0)
             print(f"Image tensor shape: {image_tensor.shape}")
@@ -155,8 +190,8 @@ def process_image():
             
             # Calculate REAL metrics
             try:
-                # Load original image for comparison - RESIZE TO MATCH ENHANCED IMAGE
-                orig_img = Image.open(input_path).convert('RGB').resize((256, 256))  # FIXED: Match enhanced image size
+                       # Load original image for comparison - RESIZE TO MATCH ENHANCED IMAGE
+                       orig_img = Image.open(input_path).convert('RGB').resize((128, 128))  # FIXED: Match enhanced image size for free tier
                 orig_array = np.array(orig_img).astype(float)
                 enh_array = enhanced_array.astype(float)
                 
@@ -179,11 +214,27 @@ def process_image():
                 
                 # UIQM calculation
                 def calculate_uiqm(img):
+                    # Ensure image is in the right format
+                    if img.dtype != np.uint8:
+                        img = (img * 255).astype(np.uint8)
+                    
+                    # Calculate colorfulness (standard deviation of all channels)
                     colorfulness = np.std(img)
-                    gray = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
-                    sharpness = np.var(cv2.Laplacian(gray, cv2.CV_64F))
+                    
+                    # Convert to grayscale for sharpness and contrast
+                    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+                    
+                    # Calculate sharpness using Laplacian
+                    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+                    sharpness = np.var(laplacian)
+                    
+                    # Calculate contrast (standard deviation of grayscale)
                     contrast = np.std(gray)
-                    return 0.0282 * colorfulness + 0.2953 * sharpness + 0.6765 * contrast
+                    
+                    # UIQM formula (simplified version)
+                    uiqm = 0.0282 * colorfulness + 0.2953 * sharpness + 0.6765 * contrast
+                    
+                    return uiqm
                 
                 orig_uiqm = calculate_uiqm(orig_array)
                 enh_uiqm = calculate_uiqm(enh_array)
@@ -192,13 +243,15 @@ def process_image():
                 metrics = {
                     'psnr': round(psnr, 2),
                     'ssim': round(ssim, 4),
+                    'uiqm_original': round(orig_uiqm, 2),
+                    'uiqm_enhanced': round(enh_uiqm, 2),
                     'uiqm_improvement': round(uiqm_improvement, 1)
                 }
                 print(f"REAL Metrics - PSNR: {psnr:.2f} dB, SSIM: {ssim:.4f}, UIQM: {uiqm_improvement:.1f}%")
             except Exception as e:
                 print(f"Error calculating metrics: {e}")
                 # Only use fallback if calculation fails
-                metrics = {'psnr': 0, 'ssim': 0, 'uiqm_improvement': 0}
+                metrics = {'psnr': 0, 'ssim': 0, 'uiqm_original': 0, 'uiqm_enhanced': 0, 'uiqm_improvement': 0}
             
             # Read enhanced image
             with open(enhanced_path, 'rb') as f:
@@ -227,7 +280,7 @@ def process_image():
 
 @app.route('/api/process-video', methods=['POST'])
 def process_video():
-    """Process video with CNN model"""
+    """Process video with CNN model or traditional CV enhancement"""
     try:
         if 'video' not in request.files:
             return jsonify({'success': False, 'error': 'No video file provided'}), 400
@@ -239,7 +292,10 @@ def process_video():
         if not allowed_file(file.filename):
             return jsonify({'success': False, 'error': 'Invalid file type'}), 400
         
-        if cnn_model is None:
+        # Get enhancement mode (default to 'traditional' for better results on regular videos)
+        enhancement_mode = request.form.get('mode', 'traditional')  # 'underwater' or 'traditional'
+        
+        if enhancement_mode == 'underwater' and cnn_model is None:
             return jsonify({'success': False, 'error': 'CNN model not loaded'}), 500
         
         # Save uploaded file
@@ -247,7 +303,7 @@ def process_video():
         input_path = os.path.join(UPLOAD_FOLDER, filename)
         file.save(input_path)
         
-        # Process video with REAL enhancement
+        # Process video with enhancement
         try:
             import cv2
             import numpy as np
@@ -261,45 +317,66 @@ def process_video():
             # Create output video
             base_name = os.path.splitext(filename)[0]
             enhanced_path = os.path.join(OUTPUT_FOLDER, f"{base_name}_enhanced.mp4")
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(enhanced_path, fourcc, fps, (256, 256))  # Resize to 256x256
+                   fourcc = cv2.VideoWriter_fourcc(*'H264')
+                   out = cv2.VideoWriter(enhanced_path, fourcc, fps, (128, 128))  # Further reduced for free tier
+            
+            def enhance_frame_traditional(frame):
+                """Traditional computer vision enhancement for regular videos"""
+                # Resize frame to very small size for free tier
+                frame_resized = cv2.resize(frame, (128, 128))
+                
+                # Convert to LAB color space for better enhancement
+                lab = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2LAB)
+                l, a, b = cv2.split(lab)
+                
+                # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to L channel
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+                l = clahe.apply(l)
+                
+                # Merge channels back
+                enhanced_lab = cv2.merge([l, a, b])
+                enhanced_frame = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+                
+                # Apply slight sharpening
+                kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+                enhanced_frame = cv2.filter2D(enhanced_frame, -1, kernel)
+                enhanced_frame = np.clip(enhanced_frame, 0, 255).astype(np.uint8)
+                
+                # Slight saturation boost
+                hsv = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2HSV)
+                hsv[:,:,1] = hsv[:,:,1] * 1.1  # Increase saturation
+                hsv[:,:,1] = np.clip(hsv[:,:,1], 0, 255)
+                enhanced_frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+                
+                return enhanced_frame
+            
+            def enhance_frame_underwater(frame):
+                """Underwater CNN enhancement (original method) - disabled for free tier"""
+                # Skip CNN processing for free tier to save memory
+                return enhance_frame_traditional(frame)
             
             frame_count = 0
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            print(f"Processing video with {enhancement_mode} enhancement...")
             
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
                 
-                # Resize frame to 256x256
-                frame_resized = cv2.resize(frame, (256, 256))
-                
-                # Convert to PIL Image
-                frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
-                image = Image.fromarray(frame_rgb)
-                
-                # Preprocess for model
-                image_array = np.array(image) / 255.0
-                image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).float().unsqueeze(0)
-                
-                # Run inference
-                with torch.no_grad():
-                    enhanced_tensor = cnn_model(image_tensor)
-                    enhanced_tensor = torch.clamp(enhanced_tensor, 0, 1)
-                
-                # Convert back to frame
-                enhanced_array = enhanced_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
-                enhanced_array = (enhanced_array * 255).astype(np.uint8)
-                enhanced_frame = cv2.cvtColor(enhanced_array, cv2.COLOR_RGB2BGR)
+                # Choose enhancement method based on mode
+                if enhancement_mode == 'traditional':
+                    enhanced_frame = enhance_frame_traditional(frame)
+                else:  # underwater mode
+                    enhanced_frame = enhance_frame_underwater(frame)
                 
                 # Write enhanced frame
                 out.write(enhanced_frame)
                 frame_count += 1
                 
-                # Process every 10th frame to avoid memory issues
                 if frame_count % 10 == 0:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_count)
+                    print(f"Processed {frame_count}/{total_frames} frames")
             
             cap.release()
             out.release()
@@ -308,12 +385,18 @@ def process_video():
             cap = cv2.VideoCapture(input_path)
             ret, orig_frame = cap.read()
             if ret:
-                orig_frame_resized = cv2.resize(orig_frame, (256, 256))
+                       # Get original frame data - resize to free tier size
+                       orig_frame_resized = cv2.resize(orig_frame, (128, 128))
                 orig_rgb = cv2.cvtColor(orig_frame_resized, cv2.COLOR_BGR2RGB)
-                orig_image = Image.fromarray(orig_rgb)
+                orig_array = orig_rgb.astype(float) / 255.0
                 
-                # Process first frame for metrics
-                orig_array = np.array(orig_image) / 255.0
+                # Get enhanced frame data using the same method as processing
+                if enhancement_mode == 'traditional':
+                    enhanced_frame = enhance_frame_traditional(orig_frame)
+                    enhanced_rgb = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2RGB)
+                    enhanced_array = enhanced_rgb.astype(float) / 255.0
+                else:  # underwater mode
+                    orig_image = Image.fromarray(orig_rgb)
                 orig_tensor = torch.from_numpy(orig_array).permute(2, 0, 1).float().unsqueeze(0)
                 
                 with torch.no_grad():
@@ -345,23 +428,43 @@ def process_video():
                 
                 # UIQM
                 def calculate_uiqm(img):
+                    # Ensure image is in the right format
+                    if img.dtype != np.uint8:
+                        img = (img * 255).astype(np.uint8)
+                    
+                    # Calculate colorfulness (standard deviation of all channels)
                     colorfulness = np.std(img)
-                    gray = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
-                    sharpness = np.var(cv2.Laplacian(gray, cv2.CV_64F))
+                    
+                    # Convert to grayscale for sharpness and contrast
+                    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+                    
+                    # Calculate sharpness using Laplacian
+                    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+                    sharpness = np.var(laplacian)
+                    
+                    # Calculate contrast (standard deviation of grayscale)
                     contrast = np.std(gray)
-                    return 0.0282 * colorfulness + 0.2953 * sharpness + 0.6765 * contrast
+                    
+                    # UIQM formula (simplified version)
+                    uiqm = 0.0282 * colorfulness + 0.2953 * sharpness + 0.6765 * contrast
+                    
+                    return uiqm
                 
                 orig_uiqm = calculate_uiqm(orig_float)
                 enh_uiqm = calculate_uiqm(enh_float)
                 uiqm_improvement = ((enh_uiqm - orig_uiqm) / orig_uiqm) * 100 if orig_uiqm > 0 else 0
                 
+                print(f"UIQM Debug - Original: {orig_uiqm:.4f}, Enhanced: {enh_uiqm:.4f}, Improvement: {uiqm_improvement:.1f}%")
+                
                 real_metrics = {
                     'psnr': round(psnr, 2),
                     'ssim': round(ssim, 4),
+                    'uiqm_original': round(orig_uiqm, 2),
+                    'uiqm_enhanced': round(enh_uiqm, 2),
                     'uiqm_improvement': round(uiqm_improvement, 1)
                 }
             else:
-                real_metrics = {'psnr': 0, 'ssim': 0, 'uiqm_improvement': 0}
+                real_metrics = {'psnr': 0, 'ssim': 0, 'uiqm_original': 0, 'uiqm_enhanced': 0, 'uiqm_improvement': 0}
             
             cap.release()
             
