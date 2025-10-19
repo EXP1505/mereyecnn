@@ -303,16 +303,21 @@ def process_video():
         input_path = os.path.join(UPLOAD_FOLDER, filename)
         file.save(input_path)
         
-        # Process video with enhancement
-        try:
-            import cv2
-            import numpy as np
-            
-            # Read video
-            cap = cv2.VideoCapture(input_path)
-            fps = int(cap.get(cv2.CAP_PROP_FPS))
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                   # Process video with enhancement - optimized for free tier
+                   try:
+                       import cv2
+                       import numpy as np
+                       
+                       # Read video
+                       cap = cv2.VideoCapture(input_path)
+                       fps = int(cap.get(cv2.CAP_PROP_FPS))
+                       width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                       height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                       
+                       # Limit video length for free tier (max 10 seconds)
+                       total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                       max_frames = min(total_frames, fps * 10)  # 10 seconds max
+                       print(f"Processing {max_frames}/{total_frames} frames (free tier limit)")
             
             # Create output video
             base_name = os.path.splitext(filename)[0]
@@ -356,11 +361,10 @@ def process_video():
                 return enhance_frame_traditional(frame)
             
             frame_count = 0
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             
             print(f"Processing video with {enhancement_mode} enhancement...")
             
-            while True:
+            while frame_count < max_frames:
                 ret, frame = cap.read()
                 if not ret:
                     break
@@ -376,7 +380,10 @@ def process_video():
                 frame_count += 1
                 
                 if frame_count % 10 == 0:
-                    print(f"Processed {frame_count}/{total_frames} frames")
+                    print(f"Processed {frame_count}/{max_frames} frames")
+                    # Force garbage collection for free tier
+                    import gc
+                    gc.collect()
             
             cap.release()
             out.release()
