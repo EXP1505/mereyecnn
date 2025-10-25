@@ -417,3 +417,4 @@ if __name__ == '__main__':
     print("Optimized for Render free tier")
     print("Model loaded: True (OpenCV Enhancement)")
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8000)), debug=False)
+
